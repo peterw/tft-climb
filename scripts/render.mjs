@@ -65,7 +65,8 @@ const patchMentions = (names) => {
   for (const s of P.sections) for (const e of s.entries) {
     if (names.some((n) => e.name.toLowerCase() === n.toLowerCase())) out.push({ section: s.title, ...e });
   }
-  return out;
+  const seen = new Set();
+  return out.filter((m) => { const k = m.section + "|" + m.name; if (seen.has(k)) return false; seen.add(k); return true; });
 };
 
 // ---------- comps ----------
@@ -140,8 +141,8 @@ article .lede{font-size:18px;color:#333}
 .u img{width:28px;height:28px;border-radius:5px;border:2px solid var(--c);object-fit:cover}
 .i{display:inline-flex;align-items:center;gap:5px;margin:0 8px 4px 0;font-size:14px}.i img{width:22px;height:22px;border-radius:4px}
 table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}td,th{border-bottom:1px solid #eee;padding:7px 6px;text-align:left;vertical-align:top}th{font-size:12px;color:#666;font-weight:600}
-.hex{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:440px;margin:10px 0}.hex div{aspect-ratio:1;border-radius:8px;background:#f2f2f4;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
-.hex .odd{transform:translateX(50%)}.hex img{width:100%;height:100%;object-fit:cover}.hex .lbl{grid-column:1/-1;aspect-ratio:auto;background:none;font-size:11px;color:#888;justify-content:flex-start;height:auto}
+.hex{display:grid;grid-template-columns:repeat(15,1fr);gap:4px;max-width:440px;margin:10px 0}.hex div{grid-column:span 2;aspect-ratio:1;border-radius:8px;background:#f2f2f4;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+.hex .odd{grid-column:2/span 2}.hex img{width:100%;height:100%;object-fit:cover}.hex div.lbl{grid-column:1/-1;aspect-ratio:auto;background:none;font-size:11px;color:#888;justify-content:flex-start;height:auto}
 .muted{color:#666;font-size:14px}.src{font-size:13px;color:#666;border-top:1px solid #eee;margin-top:36px;padding-top:12px}
 .chg{font-size:14px;margin:2px 0 10px 0;padding-left:18px}.chg li{margin:2px 0}
 footer{font-size:13px;color:#777;text-align:center;padding:24px;border-top:1px solid #eee}
@@ -214,7 +215,7 @@ for (const [rank, k] of comps.entries()) {
   let hex = `<div class="hex"><div class="lbl">Front row (enemy side)</div>`;
   for (const row of [3, 2, 1, 0]) for (let col = 1; col <= 7; col++) {
     const cell = `cell_${row * 7 + col}`; const u = cells[cell];
-    hex += `<div class="${row % 2 ? "odd" : ""}" title="${u ? esc(uName(u)) : ""}">${u ? `<img src="${img(champs[u]?.squareIcon)}" alt="${esc(uName(u))}" loading="lazy" style="outline:2px solid ${costColor[champs[u]?.cost]}">` : ""}</div>`;
+    hex += `<div class="${row % 2 && col === 1 ? "odd" : ""}" title="${u ? esc(uName(u)) : ""}">${u ? `<img src="${img(champs[u]?.squareIcon)}" alt="${esc(uName(u))}" loading="lazy" style="outline:2px solid ${costColor[champs[u]?.cost]}">` : ""}</div>`;
   }
   hex += `<div class="lbl">Back row</div></div>`;
 
@@ -351,8 +352,8 @@ if (D.patch) {
 <h1>What ${esc(D.patch.title.replace(/^Teamfight Tactics /i, "").replace(/^patch/i, "Patch"))} changed, and what to do about it</h1>
 <p class="lede">${esc(P.intro || "")}</p>
 <div class="facts"><span>Published ${esc(D.patch.published.slice(0, 10))}</span><span>${esc(setName)}</span><a class="tag" style="background:#eee" href="${esc(D.patch.url)}">Full notes ↗</a></div>
-${affected.length ? `<h2>What it means for today's meta comps</h2><table><tr><th>Comp</th><th>Changed this patch</th></tr>${affected.map((k) => `<tr><td><a href="../c/${k.slug}/">${esc(k.name)}</a></td><td>${patchMentions([...k.units.map(uName), ...(k.c.traits_string || "").split(", ").map(tName)]).map((m) => esc(m.name)).join(", ")}</td></tr>`).join("")}</table><div class="box2 do">If a comp's carry or core trait got buffed, it will be overplayed in the first days. Scout for it before you commit.</div>` : ""}
-${big.map((s) => `<h2>${esc(s.title.charAt(0) + s.title.slice(1).toLowerCase())}</h2>${s.notes.length ? `<details><summary class="muted">Why Riot changed it</summary><p class="muted">${s.notes.map(esc).join("<br><br>")}</p></details>` : ""}${s.entries.map((e) => `<p style="margin:6px 0 0"><b>${esc(e.name)}</b></p>${e.changes.length ? `<ul class="chg">${e.changes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`).join("")}`).join("")}
+${affected.length ? `<h2>What it means for today's meta comps</h2><table><tr><th>Comp</th><th>Changed this patch</th></tr>${affected.map((k) => `<tr><td><a href="../c/${k.slug}/">${esc(k.name)}</a></td><td>${patchMentions([...k.units.map(uName), ...(k.c.traits_string || "").split(", ").map(tName)]).map((m) => esc(m.name)).filter((x, i, a) => a.indexOf(x) === i).join(", ")}</td></tr>`).join("")}</table><div class="box2 do">If a comp's carry or core trait got buffed, it will be overplayed in the first days. Scout for it before you commit.</div>` : ""}
+${big.map((s) => `<h2>${esc(s.title.charAt(0) + s.title.slice(1).toLowerCase())}</h2>${s.notes.length && !s.entries.length ? `<p>${s.notes.map(esc).join("<br><br>")}</p>` : s.notes.length ? `<details><summary class="muted">Why Riot changed it</summary><p class="muted">${s.notes.map(esc).join("<br><br>")}</p></details>` : ""}${s.entries.map((e) => `<p style="margin:6px 0 0"><b>${esc(e.name)}</b></p>${e.changes.length ? `<ul class="chg">${e.changes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`).join("")}`).join("")}
 <p class="src">Source: <a href="${esc(D.patch.url)}">Riot patch notes</a>. Pulled ${ago(updated)}.</p></article>`;
   await mkdir(`${OUT}/patch`, { recursive: true });
   await writeFile(`${OUT}/patch/index.html`, page({ title: `${D.patch.title}: what changed`, desc: P.intro, body, depth: 1 }));

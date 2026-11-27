@@ -27,14 +27,15 @@ const isCarry = (id) => (champs[id]?.stats?.range ?? 1) >= 3;
 const costColor = { 1: "#9aa4af", 2: "#3fb27f", 3: "#3a8fd9", 4: "#b44fe0", 5: "#f0b33c" };
 
 const patchNum = (D.patch?.title.match(/(\d+\.\d+)/) || [])[1] || "";
-const setName = D.set.name || `Set ${D.set.number}`;
+const setTheme = ((D.patch?.body || "").replace(/<[^>]+>/g, " ").match(/last patch of ([A-Z][A-Za-z ]{2,30}?) before/) || [])[1];
+const setName = `Set ${D.set.number}` + (setTheme ? ` (${setTheme})` : "");
 const updated = D.fetchedAt;
 const statsUpdated = new Date(D.sources.metatft.updated).toISOString();
 
 // ---------- patch parsing ----------
 function parsePatch(body) {
   if (!body) return { intro: "", sections: [] };
-  const clean = (h) => h.replace(/<br\s*\/?>/g, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "’").replace(/\s+/g, " ").trim();
+  const clean = (h) => h.replace(/<br\s*\/?>/g, " ").replace(/<\/(h\d|p|div|li)>/g, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "’").replace(/\s+/g, " ").trim();
   const parts = body.split(/<h4[^>]*>/).slice(1);
   const sections = [];
   for (const p of parts) {
@@ -162,7 +163,19 @@ ${body}
 // ---------- cards ----------
 const cards = [];
 const addCard = (o) => cards.push(o);
-const splash = (id) => img(champs[id]?.icon || champs[id]?.squareIcon);
+const okCache = new Map();
+async function ok(url) {
+  if (!url) return false;
+  if (!okCache.has(url)) okCache.set(url, fetch(url, { method: "HEAD" }).then((r) => r.ok).catch(() => false));
+  return okCache.get(url);
+}
+// Card art: try the named unit, then the most expensive real champion on the board.
+async function art(ids) {
+  const cands = [...new Set(ids.filter(Boolean))];
+  const byCost = [...cands].sort((a, b) => (/_18_|18$/.test(b) ? 1 : 0) - (/_18_|18$/.test(a) ? 1 : 0) || (champs[b]?.cost || 0) - (champs[a]?.cost || 0));
+  for (const id of [cands[0], ...byCost]) for (const u of [img(champs[id]?.icon), img(champs[id]?.squareIcon)]) if (await ok(u)) return u;
+  return "";
+}
 
 // ---------- comp pages ----------
 for (const [rank, k] of comps.entries()) {
@@ -182,7 +195,8 @@ for (const [rank, k] of comps.entries()) {
   const pm = patchMentions([...new Set([...board8.map(uName), ...(c.traits_string || "").split(", ").map(tName)])]);
 
   const buildRows = k.carries.map((u) => {
-    const bs = (d.builds || []).filter((b) => b.unit === u && b.num_items === 3 && b.count >= 150).sort((a, b) => a.avg - b.avg).slice(0, 2);
+    const craftable = (b) => b.buildName.every((i) => (D.items[i]?.comp || []).length === 2 && !/Radiant|Artifact|Ornn/i.test(i));
+    const bs = (d.builds || []).filter((b) => b.unit === u && b.num_items === 3 && b.count >= 150 && craftable(b)).sort((a, b) => b.score - a.score).slice(0, 2);
     return bs.map((b) => `<tr><td>${unitChip(u)}</td><td>${b.buildName.map(itemChip).join("")}</td><td>${f2(b.avg)}</td><td>${b.place_change < 0 ? "▲ " + f2(-b.place_change) : "▼ " + f2(b.place_change)}</td></tr>`).join("");
   }).join("");
 
@@ -221,7 +235,7 @@ ${early.length ? `<p class="muted">Early board seen at level 4 (top-4 rate ${pct
 ${Object.keys(cells).length ? `<p class="muted">Where top players put each unit (most common hex):</p>${hex}` : ""}
 
 <h2>Carry items</h2>
-<table><tr><th>Unit</th><th>Build</th><th>Avg</th><th>vs. other builds</th></tr>${buildRows || `<tr><td colspan=4 class=muted>Not enough games yet.</td></tr>`}</table>
+<table><tr><th>Unit</th><th>Build</th><th>Avg</th><th>vs. unit avg</th></tr>${buildRows || `<tr><td colspan=4 class=muted>Not enough games yet.</td></tr>`}</table>
 <p class="muted">Components to prioritize: ${[...new Set(k.carries.flatMap((u) => ((d.builds || []).find((b) => b.unit === u && b.num_items === 3)?.buildName || []).flatMap((i) => D.items[i]?.comp || [])))].slice(0, 5).map(itemChip).join("") || "–"}</p>
 
 ${augs.length ? `<h2>Augments that fit</h2><p>${augs.map((a) => `<span class="u" style="padding:3px 9px">${esc(aName(a.id))}</span>`).join("")}</p>` : ""}
@@ -235,7 +249,7 @@ ${pm.length ? `<h2>What patch ${esc(patchNum)} changed for this comp</h2>${pm.ma
 </article>`;
   await mkdir(`${OUT}/c/${k.slug}`, { recursive: true });
   await writeFile(`${OUT}/c/${k.slug}/index.html`, page({ title: `${k.name}: how to play it (TFT ${patchNum})`, desc: `${k.plan.label}. ${f2(c.overall.avg)} avg placement.`, body, depth: 2 }));
-  addCard({ href: `c/${k.slug}/`, title: `${k.name}`, sub: `${f2(c.overall.avg)} avg · ${k.plan.label}`, bg: splash(k.mainCarry), tag: "meta", time: "1 min" });
+  addCard({ href: `c/${k.slug}/`, title: `${k.name}`, sub: `Avg place ${f2(c.overall.avg)} · ${k.plan.label}`, bg: await art([k.mainCarry, ...board8]), tag: "meta", time: "1 min" });
 }
 
 // ---------- lesson pages (evergreen principle + live example) ----------
@@ -245,14 +259,14 @@ const L = (o) => lessons.push(o);
 // Leveling: biggest final-level gap among top comps
 {
   const best = comps.map((k) => { const f = (k.d.final_levels || []).filter((x) => x.count / k.c.overall.count > 0.03).sort((a, b) => +a.level - +b.level); return { k, lo: f[0], hi: f[f.length - 1] }; }).filter((x) => x.lo && x.hi && x.lo !== x.hi).sort((a, b) => (b.lo.avg - b.hi.avg) - (a.lo.avg - a.hi.avg))[0];
-  if (best) L({ slug: "levels-win-games", tag: "level", bg: splash(best.k.mainCarry), title: `Level ${best.hi.level} places ${f2(best.hi.avg)}. Level ${best.lo.level} places ${f2(best.lo.avg)}.`, sub: "Gold sitting in the bank doesn't fight",
+  if (best) L({ slug: "levels-win-games", tag: "level", bg: await art([best.k.mainCarry, ...(comps[0]?.units || [])]), title: `Level ${best.hi.level} places ${f2(best.hi.avg)}. Level ${best.lo.level} places ${f2(best.lo.avg)}.`, sub: "Gold sitting in the bank doesn't fight",
     principle: "Levels raise your odds of finding higher-cost units and give you one more unit on the board. Fast 8 and fast 9 comps win by spending gold on XP at the right moment, not by rolling it away at level 7.",
     example: `In <a href="../../c/${best.k.slug}/">${esc(best.k.name)}</a> this patch, games that end at level ${best.hi.level} average <b>${f2(best.hi.avg)}</b>, and games that end at level ${best.lo.level} average <b>${f2(best.lo.avg)}</b>. Part of this is survivorship (if you live longer, you level more), but the gap is too big to explain away.`,
     doThis: ["Decide your plan by 3-2: reroll comp (roll at 5/6/7) or fast 8 or 9. Then follow its level timing.", "On a fast 8 plan, level 8 on 4-1 or 4-2 before you roll, not after.", "If you're healthy (60+ HP) on stage 4 at 8, keep saving for 9 instead of rolling the gold away."],
     dont: "Don't roll at level 7 for 4-costs. Your odds are much worse than at 8." });
 }
 // Econ
-L({ slug: "interest-staircase", tag: "econ", bg: splash(comps[1]?.mainCarry), title: "Interest is a staircase, and each step is 10 gold", sub: "Spend down to a breakpoint, not below it",
+L({ slug: "interest-staircase", tag: "econ", bg: await art([comps[1]?.mainCarry, ...(comps[0]?.units || [])]), title: "Interest is a staircase, and each step is 10 gold", sub: "Spend down to a breakpoint, not below it",
   principle: "You earn 1 bonus gold for every 10 gold you hold at the end of a round, up to 5 at 50. Sitting at 50 by early stage 3 roughly doubles your income compared with spending every turn, and that pays for your level 8 roll-down.",
   example: `Say you're at 47 gold. Rolling once (2 gold) leaves 45: you still get 4 interest. Buying a 3-cost leaves 42, also 4. But rolling three times leaves 41, and one more puts you at 39 and costs you 1 interest every round until you climb back. This patch's top reroll plan, ${esc(comps.find((k) => /lvl [56]/.test(k.c.levelling))?.name || "a reroll comp")}, slow rolls only with the gold <i>above</i> 50.`,
   doThis: ["Before every roll, check you won't drop below a 10-gold breakpoint (unless you're doing your big roll-down).", "Hit 50 gold by about 3-2 on a fast 8 game. Hold pairs on the bench instead of selling them.", "Break econ only when your HP or the stage says so: under about 40 HP, or the planned roll-down stage."],
@@ -261,7 +275,7 @@ L({ slug: "interest-staircase", tag: "econ", bg: splash(comps[1]?.mainCarry), ti
 {
   const rows = comps.map((k) => { const u = (k.d.unit_stats || []).find((x) => x.unit === k.mainCarry); const n0 = u?.num_items.find((n) => n.num_items === 0), n3 = u?.num_items.find((n) => n.num_items === 3); return n0 && n3 && n0.count > 200 ? { k, n0, n3, gap: n0.avg - n3.avg } : null; }).filter(Boolean).sort((a, b) => b.gap - a.gap);
   const r = rows[0];
-  if (r) L({ slug: "three-items-one-carry", tag: "items", bg: splash(r.k.mainCarry), title: `${uName(r.k.mainCarry)} with 3 items: ${f2(r.n3.avg)}. With none: ${f2(r.n0.avg)}.`, sub: "Stack items on one carry",
+  if (r) L({ slug: "three-items-one-carry", tag: "items", bg: await art([r.k.mainCarry, ...(comps[0]?.units || [])]), title: `${uName(r.k.mainCarry)} with 3 items: ${f2(r.n3.avg)}. With none: ${f2(r.n0.avg)}.`, sub: "Stack items on one carry",
     principle: "Items multiply each other. One carry with three items that work together beats the same items split across three units. Pick the carry early, even if it's a placeholder, and stack items there.",
     example: `${esc(uName(r.k.mainCarry))} in <a href="../../c/${r.k.slug}/">${esc(r.k.name)}</a> averages <b>${f2(r.n3.avg)}</b> holding 3 items and <b>${f2(r.n0.avg)}</b> holding none. ${rows.slice(1, 3).map((x) => `${esc(uName(x.k.mainCarry))}: ${f2(x.n3.avg)} vs ${f2(x.n0.avg)}.`).join(" ")}`,
     doThis: ["By 3-2, pick one carry (the 'item holder') for your damage items, and slam on it.", "Put tank items on one frontliner, not spread across all of them.", "When you swap carries, move items with a Magnet or Reforger instead of rebuilding."],
@@ -279,7 +293,7 @@ L({ slug: "interest-staircase", tag: "econ", bg: splash(comps[1]?.mainCarry), ti
 // Reroll 3-star
 {
   const rr = comps.filter((k) => /lvl [567]/.test(k.c.levelling)).map((k) => { const u = (k.d.unit_stats || []).find((x) => x.unit === k.mainCarry); const t2 = u?.tiers.find((t) => t.tier === 2), t3 = u?.tiers.find((t) => t.tier === 3); return t2 && t3 && t3.count > 100 ? { k, t2, t3 } : null; }).filter(Boolean).sort((a, b) => (b.t2.avg - b.t3.avg) - (a.t2.avg - a.t3.avg))[0];
-  if (rr) L({ slug: "reroll-means-three-star", tag: "level", bg: splash(rr.k.mainCarry), title: `3-star ${uName(rr.k.mainCarry)}: ${f2(rr.t3.avg)}. 2-star: ${f2(rr.t2.avg)}.`, sub: "A reroll comp that doesn't 3-star is just a weak board",
+  if (rr) L({ slug: "reroll-means-three-star", tag: "level", bg: await art([rr.k.mainCarry, ...(comps[0]?.units || [])]), title: `3-star ${uName(rr.k.mainCarry)}: ${f2(rr.t3.avg)}. 2-star: ${f2(rr.t2.avg)}.`, sub: "A reroll comp that doesn't 3-star is just a weak board",
     principle: "Reroll comps give up the late game in exchange for 3-star cheap carries early. If you don't hit the 3-star, you're playing a weaker board at a lower level. Commit early, roll at the right level, and stop rolling once you hit.",
     example: `${esc(uName(rr.k.mainCarry))} in <a href="../../c/${rr.k.slug}/">${esc(rr.k.name)}</a> averages <b>${f2(rr.t3.avg)}</b> at 3 stars and <b>${f2(rr.t2.avg)}</b> at 2 stars.`,
     doThis: ["Only reroll a unit if you hold 4 or more copies by 3-1 and nobody else is buying it.", "Roll at the comp's level (5, 6 or 7) and keep 50 gold while you slow roll.", "Once your carries are 3-star, stop rolling and level up."],
@@ -288,7 +302,7 @@ L({ slug: "interest-staircase", tag: "econ", bg: splash(comps[1]?.mainCarry), ti
 // Scouting/contest
 {
   const ct = comps.map((k) => ({ k, x: (k.d.counters || []).filter((x) => String(x.against) !== String(k.id) && x.place_change > 0).sort((a, b) => b.place_change - a.place_change)[0] })).filter((x) => x.x).sort((a, b) => b.x.place_change - a.x.place_change)[0];
-  if (ct) L({ slug: "scout-before-you-roll", tag: "mind", bg: splash(ct.k.mainCarry), title: `${ct.k.name} drops ${f2(ct.x.place_change)} places when ${compLabel(ct.x.against)} is in the lobby`, sub: "Scout before you roll",
+  if (ct) L({ slug: "scout-before-you-roll", tag: "mind", bg: await art([ct.k.mainCarry, ...(comps[0]?.units || [])]), title: `${ct.k.name} drops ${f2(ct.x.place_change)} places when ${compLabel(ct.x.against)} is in the lobby`, sub: "Scout before you roll",
     principle: "The pool of each champion is shared by all 8 players. If someone else wants your units, your odds of hitting fall and your comp gets worse. It takes ten seconds to scout, and it changes what you should play.",
     example: `This patch, <a href="../../c/${ct.k.slug}/">${esc(ct.k.name)}</a> places <b>${f2(ct.x.place_change)}</b> worse on average in lobbies that also have ${esc(compLabel(ct.x.against))}.`,
     doThis: ["Scout the whole lobby at 2-1, 3-2 and just before your big roll-down.", "If 2+ players share your carry, pivot to the comp that shares your items.", "Before the final fights, position against your strongest opponent's board."],
@@ -299,7 +313,7 @@ L({ slug: "interest-staircase", tag: "econ", bg: splash(comps[1]?.mainCarry), ti
   const k = comps[0]; const pos = k.d.positioning?.units || {}; const car = pos[k.mainCarry]?.positions?.[0];
   const rowOf = (c) => Math.floor((+c.replace("cell_", "") - 1) / 7);
   const where = car ? (rowOf(car.cell) === 0 ? ([1, 7].includes(+car.cell.replace("cell_", "")) ? "back-row corner" : "back row, one hex in from the corner") : "middle rows") : "back row";
-  L({ slug: "position-the-carry", tag: "pos", bg: splash(k.mainCarry), title: `Top players put ${uName(k.mainCarry)} in the ${where}`, sub: "Positioning wins the close fights",
+  L({ slug: "position-the-carry", tag: "pos", bg: await art([k.mainCarry, ...(comps[0]?.units || [])]), title: `Top players put ${uName(k.mainCarry)} in the ${where}`, sub: "Positioning wins the close fights",
     principle: "Your carry has to live long enough to cast. Put it away from the threat: the back corner against melee, a hex in from the corner against assassins and hooks, and spread out against splash damage. Tanks go in the front row, facing the enemy's carry.",
     example: `In <a href="../../c/${k.slug}/">${esc(k.name)}</a>, the most common spot for ${esc(uName(k.mainCarry))} is the ${where}. The comp page shows the full board.`,
     doThis: ["Every round on stage 4+, look at where the enemy's carry stands and put your tankiest unit across from it.", "Against assassins (they jump to your back row), move the carry one hex in and put a tank in the corner.", "Against splash damage, leave a hex between your backliners."],
@@ -308,14 +322,14 @@ L({ slug: "interest-staircase", tag: "econ", bg: splash(comps[1]?.mainCarry), ti
 // Augments
 {
   const s = D.augTiers.find((t) => t.label === "S")?.content || [];
-  if (s.length) L({ slug: "augment-picks", tag: "aug", bg: splash(comps[2]?.mainCarry), title: `${s.length} S-tier augments this patch, starting with ${aName(s[0].id)}`, sub: "Pick for your board, then for raw power",
+  if (s.length) L({ slug: "augment-picks", tag: "aug", bg: await art([comps[2]?.mainCarry, ...(comps[0]?.units || [])]), title: `${s.length} S-tier augments this patch, starting with ${aName(s[0].id)}`, sub: "Pick for your board, then for raw power",
     principle: "Choose augments in this order: whatever fits your board and items, then raw power or econ. Rerolling the augment choice is free value when nothing fits. On your first augment, flexible econ or item augments keep your options open.",
     example: `MetaTFT's current S tier: ${s.slice(0, 14).map((a) => `<span class="u" style="padding:3px 9px">${esc(aName(a.id))}</span>`).join("")}`,
     doThis: ["Reroll if none of the three fits your board.", "On the first augment, prefer flexible econ or item augments over a trait you might not play.", "On the third augment, take pure combat power if you're low on HP."],
     dont: "Don't force a trait augment into a comp that doesn't use the trait." });
 }
 // HP is a resource
-L({ slug: "hp-is-a-currency", tag: "mind", bg: splash(comps[3]?.mainCarry), title: "HP is a currency. Spend it on purpose.", sub: "Lose streak or win streak, not 50/50",
+L({ slug: "hp-is-a-currency", tag: "mind", bg: await art([comps[3]?.mainCarry, ...(comps[0]?.units || [])]), title: "HP is a currency. Spend it on purpose.", sub: "Lose streak or win streak, not 50/50",
   principle: "Each streak pays bonus gold. Alternating wins and losses pays nothing and still costs HP. Choose early: lose on purpose with a weak board and bank gold, or stay strong and win. The worst spot is in between.",
   example: `Fast 9 comps this patch (${comps.filter((k) => k.c.levelling === "Fast 9").map((k) => `<a href="../../c/${k.slug}/">${esc(k.name)}</a>`).join(", ") || "none in the top list"}) only work if you reach stage 5 with enough HP to keep saving. That's why the early game matters even when you plan to lose it.`,
   doThis: ["After 2-1, decide: streak up (buy units, slam items) or lose streak (sell to 50, take the fights you lose).", "With about 40 HP or less, stop saving and roll to stabilize.", "Track your HP compared with the lobby, not on its own. Being 4th-highest at 30 HP is fine."],
@@ -330,12 +344,12 @@ if (D.patch) {
 <h1>What ${esc(D.patch.title.replace(/^Teamfight Tactics /i, "").replace(/^patch/i, "Patch"))} changed, and what to do about it</h1>
 <p class="lede">${esc(P.intro || "")}</p>
 <div class="facts"><span>Published ${esc(D.patch.published.slice(0, 10))}</span><span>${esc(setName)}</span><a class="tag" style="background:#eee" href="${esc(D.patch.url)}">Full notes ↗</a></div>
-${affected.length ? `<h2>Meta comps this patch touches</h2><p>${affected.map((k) => `<a class="u" style="padding:3px 9px;text-decoration:none" href="../c/${k.slug}/">${esc(k.name)}</a>`).join("")}</p><div class="box2 do">If a comp's carry or core trait got buffed, it will be overplayed in the first days. Scout for it before you commit.</div>` : ""}
-${big.map((s) => `<h2>${esc(s.title.charAt(0) + s.title.slice(1).toLowerCase())}</h2>${s.notes.length ? `<p class="muted">${s.notes.slice(0, 3).map(esc).join(" ")}</p>` : ""}${s.entries.map((e) => `<p style="margin:6px 0 0"><b>${esc(e.name)}</b></p>${e.changes.length ? `<ul class="chg">${e.changes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`).join("")}`).join("")}
+${affected.length ? `<h2>What it means for today's meta comps</h2><table><tr><th>Comp</th><th>Changed this patch</th></tr>${affected.map((k) => `<tr><td><a href="../c/${k.slug}/">${esc(k.name)}</a></td><td>${patchMentions([...k.units.map(uName), ...(k.c.traits_string || "").split(", ").map(tName)]).map((m) => esc(m.name)).join(", ")}</td></tr>`).join("")}</table><div class="box2 do">If a comp's carry or core trait got buffed, it will be overplayed in the first days. Scout for it before you commit.</div>` : ""}
+${big.map((s) => `<h2>${esc(s.title.charAt(0) + s.title.slice(1).toLowerCase())}</h2>${s.notes.length ? `<details><summary class="muted">Why Riot changed it</summary><p class="muted">${s.notes.map(esc).join("<br><br>")}</p></details>` : ""}${s.entries.map((e) => `<p style="margin:6px 0 0"><b>${esc(e.name)}</b></p>${e.changes.length ? `<ul class="chg">${e.changes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`).join("")}`).join("")}
 <p class="src">Source: <a href="${esc(D.patch.url)}">Riot patch notes</a>. Pulled ${ago(updated)}.</p></article>`;
   await mkdir(`${OUT}/patch`, { recursive: true });
   await writeFile(`${OUT}/patch/index.html`, page({ title: `${D.patch.title}: what changed`, desc: P.intro, body, depth: 1 }));
-  cards.unshift({ href: "patch/", title: `Patch ${patchNum}: what changed`, sub: `${big.reduce((n, s) => n + s.entries.length, 0)} changes · ${affected.length} meta comps affected`, bg: splash(affected[0]?.mainCarry || comps[0]?.mainCarry), tag: "patch", time: "3 min" });
+  cards.unshift({ href: "patch/", title: `Patch ${patchNum}: what changed`, sub: `${big.reduce((n, s) => n + s.entries.length, 0)} changes · ${affected.length} meta comps affected`, bg: await art([affected[0]?.mainCarry, ...(affected[0]?.units || comps[0]?.units || [])]), tag: "patch", time: "3 min" });
 }
 
 for (const l of lessons) {
